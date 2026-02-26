@@ -4,27 +4,31 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Log Divisi Laminasi Artdiary</title>
+    <!-- Dependencies -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Firebase Compat (Stable for Single File) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        input[type="time"]::-webkit-calendar-picker-indicator { cursor: pointer; }
     </style>
 </head>
 <body class="bg-[#f8fafc] text-slate-900 min-h-screen">
     <div id="root"></div>
 
-    <script type="text/babel" data-type="module">
+    <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // ==========================================
         // Firebase Config
-        // ==========================================
         const manualConfig = {
             apiKey: "AIzaSyDhqBiORVQBr4RJhjV_Q8CAcyGthNTKOz8",
             authDomain: "laminasi-artdiary.firebaseapp.com",
@@ -37,13 +41,11 @@
 
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : manualConfig;
 
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, serverTimestamp, query } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'artdiary-laminasi-v1';
         
         const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwNdF232eSTWJLN80Ze4fYL3tRKSAJo70qXLbXM-PaU0oMDP4HxuA7Xz5KiraubZZNm/exec";
@@ -62,7 +64,6 @@
             const [isSyncing, setIsSyncing] = useState(false);
             const [syncStatus, setSyncStatus] = useState(null);
 
-            // Form States
             const [workerName, setWorkerName] = useState(localStorage.getItem('artdiary_worker_name') || '');
             const [assistantNames, setAssistantNames] = useState(''); 
             const [itemName, setItemName] = useState('');
@@ -80,37 +81,27 @@
                 const initAuth = async () => {
                     try {
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
+                            await auth.signInWithCustomToken(__initial_auth_token);
                         } else {
-                            await signInAnonymously(auth);
+                            await auth.signInAnonymously();
                         }
-                    } catch (err) {
-                        console.error("Auth Error:", err);
-                    }
+                    } catch (err) { console.error("Auth Error:", err); }
                 };
                 initAuth();
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    setUser(u);
-                    if (!u) setLoading(false);
-                });
-                return () => unsubscribe();
+                return auth.onAuthStateChanged(setUser);
             }, []);
 
             useEffect(() => {
                 if (!user) return;
-                const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs');
-                const unsubscribe = onSnapshot(colRef, 
+                const colRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('laminasi_logs');
+                return colRef.onSnapshot(
                     (snapshot) => {
                         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         setTasks(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
                         setLoading(false);
                     }, 
-                    (err) => {
-                        console.error("Firestore Error:", err);
-                        setLoading(false);
-                    }
+                    (err) => { console.error("Firestore Error:", err); setLoading(false); }
                 );
-                return () => unsubscribe();
             }, [user]);
 
             useEffect(() => { 
@@ -166,108 +157,87 @@
                 };
 
                 try {
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs'), {
+                    const colRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('laminasi_logs');
+                    await colRef.add({
                         ...logData,
-                        createdAt: serverTimestamp(),
-                        dateString: now.toLocaleDateString('id-ID'),
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         isoDate: now.toISOString().split('T')[0],
                         durationValue: duration
                     });
 
                     if (SHEETS_WEBAPP_URL) {
-                        fetch(SHEETS_WEBAPP_URL, { 
-                            method: 'POST', 
-                            mode: 'no-cors', 
-                            headers: { 'Content-Type': 'text/plain' }, 
-                            body: JSON.stringify(logData) 
-                        }).catch(e => console.warn("Sheets Sync Fail", e));
+                        fetch(SHEETS_WEBAPP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(logData) });
                     }
 
                     setSyncStatus('success');
                     setItemName(''); setOplah(''); setPcsSelesai(''); setStartTime(''); setEndTime(''); setKendala('');
                     setTimeout(() => setSyncStatus(null), 3000);
-                } catch (err) { 
-                    console.error("Save Error:", err); 
-                } finally { 
-                    setIsSyncing(false); 
-                }
+                } catch (err) { console.error("Save Error:", err); } finally { setIsSyncing(false); }
             };
 
             const filteredTasks = tasks.filter(task => {
-                const targetDate = selectedDate;
-                if (task.isoDate) return task.isoDate === targetDate;
+                if (task.isoDate) return task.isoDate === selectedDate;
                 if (task.createdAt) {
                     const d = task.createdAt.toDate ? task.createdAt.toDate() : new Date();
-                    return d.toISOString().split('T')[0] === targetDate;
+                    return d.toISOString().split('T')[0] === selectedDate;
                 }
                 return false;
             });
 
             return (
-                <div className="max-w-2xl mx-auto pb-28 min-h-screen relative">
-                    <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200 px-5 py-4 flex justify-between items-center rounded-b-xl shadow-sm">
+                <div className="max-w-2xl mx-auto pb-32 min-h-screen relative">
+                    <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200 px-5 py-4 flex justify-between items-center shadow-sm">
                         <div className="flex items-center gap-2.5">
-                            <div className="p-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-100">
+                            <div className="p-2 bg-blue-600 rounded-xl">
                                 <Icon name="layers" size={18} className="text-white" />
                             </div>
-                            <h1 className="text-base font-extrabold tracking-tight text-slate-900 uppercase italic">Artdiary <span className="text-blue-600">Laminasi</span></h1>
+                            <h1 className="text-base font-extrabold text-slate-900 uppercase italic">Artdiary <span className="text-blue-600">Laminasi</span></h1>
                         </div>
-                        <div className={`flex items-center gap-2 px-2.5 py-1 rounded-full border transition-all ${user ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-red-50 border-red-100 text-red-500'}`}>
-                            <div className={`w-2 h-2 rounded-full ${user ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}></div>
-                            <span className="text-[10px] font-black uppercase tracking-tighter">{user ? 'Online' : 'Offline'}</span>
+                        <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${user ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-red-50 border-red-100 text-red-500'}`}>
+                            <div className={`w-2 h-2 rounded-full ${user ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-red-500 animate-pulse'}`}></div>
+                            <span className="text-[10px] font-black uppercase tracking-widest">{user ? 'Online' : 'Offline'}</span>
                         </div>
                     </header>
 
                     <main className="p-4 space-y-6">
                         {syncStatus === 'success' && (
-                            <div className="bg-emerald-600 text-white p-4 rounded-2xl flex items-center gap-3 shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+                            <div className="bg-emerald-600 text-white p-4 rounded-2xl flex items-center gap-3 shadow-xl animate-bounce">
                                 <Icon name="check-circle" size={20} />
-                                <p className="font-bold text-sm">Laporan terkirim & form dibersihkan!</p>
+                                <p className="font-bold text-sm">Laporan terkirim ke database!</p>
                             </div>
                         )}
 
+                        {/* Form Laporan */}
                         <section className="bg-white rounded-[2rem] shadow-sm border border-slate-200 p-6">
                             <form onSubmit={handleSubmit} className="space-y-5">
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama Operator</label>
-                                        <div className="relative">
-                                            <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="Nama Anda" className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-700 bg-slate-50/50 transition-all" required />
-                                            <Icon name="user" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                        </div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Operator</label>
+                                        <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="Nama Anda" className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-700 bg-slate-50/50" required />
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Kru / Asisten</label>
-                                        <div className="relative">
-                                            <input type="text" value={assistantNames} onChange={(e) => setAssistantNames(e.target.value)} placeholder="Nama kru..." className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-medium text-slate-600 bg-slate-50/50 transition-all" />
-                                            <Icon name="users" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                        </div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Asisten</label>
+                                        <input type="text" value={assistantNames} onChange={(e) => setAssistantNames(e.target.value)} placeholder="Nama kru..." className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-medium text-slate-600 bg-slate-50/50" />
                                     </div>
                                 </div>
 
                                 {activeProjects.length > 0 && (
-                                    <div className="px-1">
-                                        <div className="flex items-center gap-1.5 mb-2">
-                                            <Icon name="history" size={12} className="text-slate-400" />
-                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Lanjutkan Projek</span>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {activeProjects.map((p, idx) => (
-                                                <button key={idx} type="button" onClick={() => { setItemName(p.name); setTotalOplah(p.totalOplah); setTotalPcs(p.totalPcs); setCategory(p.lastCategory); }} className="text-[10px] font-bold bg-white hover:bg-blue-600 hover:text-white text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 transition-all active:scale-95 shadow-sm">
-                                                    {p.name}
-                                                </button>
-                                            ))}
-                                        </div>
+                                    <div className="px-1 flex flex-wrap gap-2">
+                                        {activeProjects.map((p, idx) => (
+                                            <button key={idx} type="button" onClick={() => { setItemName(p.name); setTotalOplah(p.totalOplah); setTotalPcs(p.totalPcs); setCategory(p.lastCategory); }} className="text-[10px] font-bold bg-white hover:bg-blue-600 hover:text-white text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 transition-all active:scale-95 shadow-sm">
+                                                {p.name}
+                                            </button>
+                                        ))}
                                     </div>
                                 )}
 
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                     <div className="sm:col-span-2 space-y-1.5">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Nama Item / Order</label>
-                                        <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Contoh: Box Skincare Glow Up" className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800" required />
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Nama Item</label>
+                                        <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Contoh: Box Skincare Glow Up" className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800 uppercase" required />
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Tugas</label>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Jenis Tugas</label>
                                         <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold bg-white text-slate-700">
                                             {['Laminasi Glossy', 'Laminasi Doff', 'Laminasi Hologram', 'Laminasi Window', 'Bantu Mesin Lem', 'Bantu QC', 'Lain-lain'].map(cat => (
                                                 <option key={cat} value={cat}>{cat}</option>
@@ -289,59 +259,46 @@
 
                                 <div className="grid grid-cols-2 gap-4 pt-4 border-t border-dashed border-slate-200">
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-emerald-600 uppercase ml-1">Oplah Selesai</label>
-                                        <input type="text" value={oplah} onChange={(e) => setOplah(formatNumber(e.target.value))} placeholder="Input hasil..." className="w-full px-4 py-3 rounded-2xl border-2 border-emerald-100 bg-emerald-50/50 font-extrabold text-emerald-800 text-lg outline-none focus:ring-2 focus:ring-emerald-500" />
+                                        <label className="text-[10px] font-black text-emerald-600 uppercase ml-1">Hasil Oplah</label>
+                                        <input type="text" value={oplah} onChange={(e) => setOplah(formatNumber(e.target.value))} placeholder="Hasil..." className="w-full px-4 py-3 rounded-2xl border-2 border-emerald-100 bg-emerald-50/50 font-extrabold text-emerald-800 text-lg outline-none focus:ring-2 focus:ring-emerald-500" />
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-blue-800 uppercase ml-1">Pcs Selesai</label>
-                                        <input type="text" value={pcsSelesai} onChange={(e) => setPcsSelesai(formatNumber(e.target.value))} placeholder="Input pcs..." className="w-full px-4 py-3 rounded-2xl border-2 border-blue-100 bg-blue-50/50 font-extrabold text-blue-900 text-lg outline-none focus:ring-2 focus:ring-blue-600" />
-                                    </div>
-                                </div>
-
-                                <div className="space-y-1.5">
-                                    <label className="text-[10px] font-black text-orange-600 uppercase ml-1">Kendala / Masalah</label>
-                                    <div className="relative">
-                                        <input type="text" value={kendala} onChange={(e) => setKendala(e.target.value)} placeholder="Contoh: Lem habis, mesin trouble..." className="w-full pl-10 pr-4 py-3 rounded-2xl border border-orange-100 bg-orange-50/30 font-medium text-orange-900 outline-none focus:ring-2 focus:ring-orange-400" />
-                                        <Icon name="alert-circle" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-orange-400" size={16} />
+                                        <label className="text-[10px] font-black text-blue-800 uppercase ml-1">Hasil Pcs</label>
+                                        <input type="text" value={pcsSelesai} onChange={(e) => setPcsSelesai(formatNumber(e.target.value))} placeholder="Pcs..." className="w-full px-4 py-3 rounded-2xl border-2 border-blue-100 bg-blue-50/50 font-extrabold text-blue-900 text-lg outline-none focus:ring-2 focus:ring-blue-600" />
                                     </div>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 text-center block">Mulai</label>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase text-center block">Mulai</label>
                                         <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full p-3 rounded-2xl border border-slate-200 font-bold text-center bg-slate-50 text-xl" required />
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 text-center block">Selesai</label>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase text-center block">Selesai</label>
                                         <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-full p-3 rounded-2xl border border-slate-200 font-bold text-center bg-slate-50 text-xl" required />
                                     </div>
                                 </div>
 
-                                <button type="submit" disabled={isSyncing} className={`w-full ${isSyncing ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 active:scale-[0.98]'} text-white font-extrabold py-4 rounded-2xl transition-all shadow-xl shadow-blue-100 text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 mt-4`}>
+                                <button type="submit" disabled={isSyncing} className={`w-full ${isSyncing ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700 active:scale-95'} text-white font-extrabold py-4 rounded-2xl transition-all shadow-xl shadow-blue-100 text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 mt-2`}>
                                     {isSyncing ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Icon name="send" size={16} />}
-                                    {isSyncing ? "Menyimpan..." : "Kirim Laporan"}
+                                    Kirim Laporan
                                 </button>
                             </form>
                         </section>
 
+                        {/* Monitoring List */}
                         <section className="space-y-4">
-                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 px-2">
-                                <div className="flex items-center gap-2">
-                                    <div className="p-2 bg-slate-900 rounded-xl">
-                                        <Icon name="activity" size={18} className="text-white" />
-                                    </div>
-                                    <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">Monitoring</h2>
-                                </div>
+                            <div className="flex justify-between items-center px-2">
+                                <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2 italic uppercase">
+                                    <Icon name="activity" size={20} className="text-blue-600" /> Monitoring
+                                </h2>
                                 <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="px-4 py-2 rounded-2xl border border-slate-200 font-bold text-xs bg-white shadow-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             </div>
                             
                             <div className="space-y-4">
-                                {loading ? (
-                                    <div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div></div>
-                                ) : filteredTasks.length === 0 ? (
-                                    <div className="bg-white border-2 border-dashed border-slate-200 rounded-[2rem] p-12 text-center">
-                                        <Icon name="inbox" size={40} className="mx-auto mb-4 text-slate-200" />
-                                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Tidak ada data di tanggal ini</p>
+                                {filteredTasks.length === 0 ? (
+                                    <div className="bg-white border-2 border-dashed border-slate-200 rounded-[2rem] p-12 text-center text-slate-400 font-bold text-xs uppercase italic tracking-widest">
+                                        Data tidak ditemukan
                                     </div>
                                 ) : (
                                     filteredTasks.map(task => {
@@ -352,26 +309,27 @@
                                         const isBantu = task.category.includes('Bantu');
 
                                         return (
-                                            <div key={task.id} className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 relative overflow-hidden group">
-                                                <div className={`absolute top-0 left-0 w-2 h-full transition-all ${isBantu ? 'bg-orange-400' : 'bg-blue-600'}`}></div>
+                                            <div key={task.id} className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 relative overflow-hidden">
+                                                <div className={`absolute top-0 left-0 w-2.5 h-full ${isBantu ? 'bg-orange-400' : 'bg-blue-600'}`}></div>
                                                 
                                                 <div className="flex flex-col sm:flex-row justify-between gap-6">
-                                                    <div className="flex-1 space-y-4">
+                                                    <div className="flex-1 space-y-4 text-left">
                                                         <div>
-                                                            <div className="flex items-center gap-2 mb-1.5">
-                                                                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Produk</span>
-                                                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full text-white ${isBantu ? 'bg-orange-400' : 'bg-slate-800'}`}>{task.category}</span>
+                                                            <div className="flex items-center gap-2 mb-2">
+                                                                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-800 text-white uppercase tracking-tighter">{task.category}</span>
                                                             </div>
                                                             <h3 className="text-2xl font-extrabold text-slate-900 leading-tight uppercase font-serif italic">{task.name}</h3>
-                                                            <div className="flex flex-wrap gap-2 mt-3">
-                                                                <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-50 border border-slate-100 rounded-full">
-                                                                    <Icon name="user" size={12} className="text-slate-400" />
-                                                                    <span className="text-[10px] font-bold text-slate-600">{task.workerName}</span>
+                                                            
+                                                            {/* REVISI: Nama Operator dan Asisten diperbesar & lebih kontras */}
+                                                            <div className="flex flex-wrap gap-2.5 mt-4">
+                                                                <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-100 rounded-xl shadow-sm">
+                                                                    <Icon name="user" size={16} className="text-blue-500" />
+                                                                    <span className="text-sm font-black text-blue-900 uppercase tracking-tight">{task.workerName}</span>
                                                                 </div>
                                                                 {task.assistantNames && task.assistantNames !== '-' && (
-                                                                    <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-50 border border-slate-100 rounded-full">
-                                                                        <Icon name="users" size={12} className="text-slate-400" />
-                                                                        <span className="text-[10px] font-medium text-slate-500 italic">Asist: {task.assistantNames}</span>
+                                                                    <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-100 rounded-xl">
+                                                                        <Icon name="users" size={14} className="text-slate-400" />
+                                                                        <span className="text-xs font-bold text-slate-600 italic">Asisten: {task.assistantNames}</span>
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -379,51 +337,47 @@
 
                                                         <div className="grid grid-cols-2 gap-3">
                                                             <div className="bg-emerald-50/50 p-3 rounded-2xl border border-emerald-100">
-                                                                <p className="text-[8px] font-black text-emerald-600 uppercase mb-0.5 italic">Hasil Oplah</p>
-                                                                <p className="text-xl font-black text-emerald-700">{Number(task.oplah).toLocaleString('id-ID')} <span className="text-[10px] font-normal opacity-50 italic">Lbr</span></p>
+                                                                <p className="text-[8px] font-black text-emerald-600 uppercase mb-0.5 italic tracking-widest">Hasil Oplah</p>
+                                                                <p className="text-xl font-black text-emerald-700">{Number(task.oplah).toLocaleString('id-ID')} <span className="text-[10px] font-normal opacity-50">Lbr</span></p>
                                                             </div>
                                                             <div className="bg-blue-50/50 p-3 rounded-2xl border border-blue-100">
-                                                                <p className="text-[8px] font-black text-blue-600 uppercase mb-0.5 italic">Hasil Pcs</p>
-                                                                <p className="text-xl font-black text-blue-700">{Number(task.pcsSelesai).toLocaleString('id-ID')} <span className="text-[10px] font-normal opacity-50 italic">Pcs</span></p>
+                                                                <p className="text-[8px] font-black text-blue-600 uppercase mb-0.5 italic tracking-widest">Hasil Pcs</p>
+                                                                <p className="text-xl font-black text-blue-700">{Number(task.pcsSelesai).toLocaleString('id-ID')} <span className="text-[10px] font-normal opacity-50">Pcs</span></p>
                                                             </div>
                                                         </div>
 
                                                         {targetO > 0 && (
                                                             <div className="space-y-1.5 pt-1">
                                                                 <div className="flex justify-between items-end">
-                                                                    <span className="text-[9px] font-black text-slate-400 uppercase italic">Progres Projek</span>
+                                                                    <span className="text-[10px] font-black text-slate-400 uppercase italic">Progres Projek</span>
                                                                     <span className="text-[10px] font-black text-blue-600">{percentage}%</span>
                                                                 </div>
-                                                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                                                                <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
                                                                     <div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: `${percentage}%` }}></div>
                                                                 </div>
-                                                                <p className="text-[8px] font-bold text-slate-400 text-right uppercase tracking-tighter">Kumulatif: {totalFinishedO.toLocaleString('id-ID')} / {targetO.toLocaleString('id-ID')} Lbr</p>
+                                                                <p className="text-[8px] font-bold text-slate-400 text-right uppercase tracking-tighter">Total: {totalFinishedO.toLocaleString('id-ID')} / {targetO.toLocaleString('id-ID')} Lbr</p>
                                                             </div>
                                                         )}
 
                                                         {task.kendala && task.kendala !== '-' && (
-                                                            <div className="bg-orange-50 p-3 rounded-2xl border border-orange-100 flex gap-3 items-start">
-                                                                <Icon name="alert-triangle" size={14} className="text-orange-500 mt-0.5 shrink-0" />
-                                                                <div>
-                                                                    <p className="text-[8px] font-black text-orange-600 uppercase leading-none mb-1">Catatan Kendala:</p>
-                                                                    <p className="text-[11px] font-bold text-orange-800 italic leading-tight">"{task.kendala}"</p>
-                                                                </div>
+                                                            <div className="bg-orange-50 p-3 rounded-2xl border border-orange-100 flex gap-3 items-center">
+                                                                <Icon name="alert-triangle" size={16} className="text-orange-500 shrink-0" />
+                                                                <p className="text-[11px] font-bold text-orange-800 italic leading-tight">"{task.kendala}"</p>
                                                             </div>
                                                         )}
                                                     </div>
 
-                                                    <div className="flex sm:flex-col justify-between items-end sm:w-32 border-t sm:border-t-0 sm:border-l border-slate-100 pt-4 sm:pt-0 sm:pl-4">
-                                                        <div className="text-right space-y-1.5">
-                                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Waktu Shift</p>
+                                                    <div className="flex sm:flex-col justify-between items-end sm:w-36 border-t sm:border-t-0 sm:border-l border-slate-100 pt-4 sm:pt-0 sm:pl-4">
+                                                        <div className="text-right space-y-2">
+                                                            <p className="text-[9px] font-black text-slate-400 uppercase italic tracking-widest">Waktu Shift</p>
                                                             <div className="inline-flex items-center gap-1.5 bg-slate-900 text-white px-3 py-1.5 rounded-xl font-mono text-[11px] font-bold shadow-md">
                                                                 <Icon name="clock" size={10} className="text-blue-400" />
                                                                 {task.startTime}-{task.endTime}
                                                             </div>
-                                                            <p className="text-3xl font-black text-slate-900 leading-none pt-2 tracking-tighter">{task.durationValue}<span className="text-[10px] text-slate-400 block font-sans font-bold uppercase mt-1">Menit</span></p>
+                                                            <p className="text-4xl font-black text-slate-900 leading-none tracking-tighter pt-2">{task.durationValue}<span className="text-[10px] text-slate-400 block font-sans font-bold uppercase mt-1">Menit</span></p>
                                                         </div>
-                                                        
-                                                        <button onClick={async () => { if(confirm("Hapus data ini?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs', task.id)); }} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all">
-                                                            <Icon name="trash-2" size={18} />
+                                                        <button onClick={async () => { if(confirm("Hapus data ini?")) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('laminasi_logs').doc(task.id).delete(); }} className="p-3 text-slate-200 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all active:scale-90">
+                                                            <Icon name="trash-2" size={20} />
                                                         </button>
                                                     </div>
                                                 </div>
@@ -435,20 +389,21 @@
                         </section>
                     </main>
 
-                    <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg border-t border-slate-200 px-6 py-4 z-50 flex justify-around items-center max-w-2xl mx-auto rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
+                    {/* Dashboard Harian */}
+                    <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-xl border-t border-slate-200 px-6 py-5 z-50 flex justify-around items-center max-w-2xl mx-auto rounded-t-[2.5rem] shadow-[0_-15px_50px_rgba(0,0,0,0.1)]">
                         <div className="text-center group">
-                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 group-hover:text-emerald-500 transition-colors">Oplah Hari Ini</p>
-                            <p className="text-sm font-black text-emerald-600">{filteredTasks.reduce((s, t) => s + (parseInt(t.oplah) || 0), 0).toLocaleString('id-ID')}</p>
+                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 tracking-tighter">Oplah Harian</p>
+                            <p className="text-sm font-black text-emerald-600 tracking-tighter">{filteredTasks.reduce((s, t) => s + (parseInt(t.oplah) || 0), 0).toLocaleString('id-ID')}</p>
                         </div>
-                        <div className="h-8 w-px bg-slate-200"></div>
+                        <div className="h-10 w-px bg-slate-100"></div>
                         <div className="text-center group">
-                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 group-hover:text-blue-500 transition-colors">Durasi Kerja</p>
-                            <p className="text-sm font-black text-blue-600">{filteredTasks.reduce((s, t) => s + (parseInt(t.durationValue) || 0), 0)} Menit</p>
+                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 tracking-tighter">Durasi Shift</p>
+                            <p className="text-sm font-black text-blue-600 tracking-tighter">{filteredTasks.reduce((s, t) => s + (parseInt(t.durationValue) || 0), 0)} Menit</p>
                         </div>
-                        <div className="h-8 w-px bg-slate-200"></div>
+                        <div className="h-10 w-px bg-slate-100"></div>
                         <div className="text-center group">
-                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 group-hover:text-blue-900 transition-colors">Pcs Hari Ini</p>
-                            <p className="text-sm font-black text-blue-900">{filteredTasks.reduce((s, t) => s + (parseInt(t.pcsSelesai) || 0), 0).toLocaleString('id-ID')}</p>
+                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 tracking-tighter">Pcs Harian</p>
+                            <p className="text-sm font-black text-blue-900 tracking-tighter">{filteredTasks.reduce((s, t) => s + (parseInt(t.pcsSelesai) || 0), 0).toLocaleString('id-ID')}</p>
                         </div>
                     </nav>
                 </div>
