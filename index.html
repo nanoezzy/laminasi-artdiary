@@ -10,19 +10,21 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        input[type="time"]::-webkit-calendar-picker-indicator { cursor: pointer; }
     </style>
 </head>
-<body class="bg-slate-100 text-slate-800">
+<body class="bg-[#f8fafc] text-slate-900 min-h-screen">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
         const { useState, useEffect, useMemo } = React;
-        
-        // ==========================================================
-        // ⚠️ BAGIAN INI WAJIB DIISI DENGAN DATA DARI FIREBASE BAPAK ⚠️
-        // ==========================================================
+
+        // ==========================================
+        // Firebase Config
+        // ==========================================
         const manualConfig = {
             apiKey: "AIzaSyDhqBiORVQBr4RJhjV_Q8CAcyGthNTKOz8",
             authDomain: "laminasi-artdiary.firebaseapp.com",
@@ -32,29 +34,35 @@
             appId: "1:791864658926:web:a2136c6df23e2ed99e1cff",
             measurementId: "G-92JVZJHLER"
         };
-        // ==========================================================
 
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : manualConfig;
 
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, serverTimestamp, query } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = 'artdiary-laminasi-v1';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'artdiary-laminasi-v1';
         
         const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwNdF232eSTWJLN80Ze4fYL3tRKSAJo70qXLbXM-PaU0oMDP4HxuA7Xz5KiraubZZNm/exec";
 
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { lucide.createIcons(); }, [name]);
+            useEffect(() => { 
+                if (window.lucide) window.lucide.createIcons(); 
+            }, [name]);
             return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
         };
 
         const App = () => {
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [syncStatus, setSyncStatus] = useState(null);
+
+            // Form States
             const [workerName, setWorkerName] = useState(localStorage.getItem('artdiary_worker_name') || '');
             const [assistantNames, setAssistantNames] = useState(''); 
             const [itemName, setItemName] = useState('');
@@ -63,46 +71,71 @@
             const [oplah, setOplah] = useState(''); 
             const [pcsSelesai, setPcsSelesai] = useState(''); 
             const [category, setCategory] = useState('Laminasi Glossy');
-            const [customTask, setCustomTask] = useState('');
             const [kendala, setKendala] = useState('');
             const [startTime, setStartTime] = useState('');
             const [endTime, setEndTime] = useState('');
-            const [isSyncing, setIsSyncing] = useState(false);
-            const [syncStatus, setSyncStatus] = useState(null);
-            
-            // REVISI: Menggunakan selectedDate (YYYY-MM-DD) alih-alih bulan
             const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
 
             useEffect(() => {
-                signInAnonymously(auth).catch(err => console.error("Login Error:", err));
-                onAuthStateChanged(auth, setUser);
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (err) {
+                        console.error("Auth Error:", err);
+                    }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    if (!u) setLoading(false);
+                });
+                return () => unsubscribe();
             }, []);
 
             useEffect(() => {
                 if (!user) return;
                 const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs');
-                return onSnapshot(colRef, (snapshot) => {
-                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setTasks(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-                }, (err) => console.error("Firestore Listener Error:", err));
+                const unsubscribe = onSnapshot(colRef, 
+                    (snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setTasks(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+                        setLoading(false);
+                    }, 
+                    (err) => {
+                        console.error("Firestore Error:", err);
+                        setLoading(false);
+                    }
+                );
+                return () => unsubscribe();
             }, [user]);
 
-            useEffect(() => { localStorage.setItem('artdiary_worker_name', workerName); }, [workerName]);
+            useEffect(() => { 
+                if (workerName) localStorage.setItem('artdiary_worker_name', workerName); 
+            }, [workerName]);
 
-            const formatNumber = (num) => {
-                if (num === null || num === undefined || num === '') return "0";
-                const cleanNum = num.toString().replace(/[^0-9]/g, '');
-                return Number(cleanNum).toLocaleString('id-ID');
+            const formatNumber = (val) => {
+                if (!val) return "";
+                const num = val.toString().replace(/[^0-9]/g, '');
+                return num ? Number(num).toLocaleString('id-ID') : "";
             };
 
             const activeProjects = useMemo(() => {
                 const projects = {};
                 tasks.forEach(t => {
                     if (t.name && !projects[t.name]) {
-                        projects[t.name] = { name: t.name, totalOplah: t.totalOplah, totalPcs: t.totalPcs || t.pcs, lastCategory: t.category };
+                        projects[t.name] = { 
+                            name: t.name, 
+                            totalOplah: formatNumber(t.totalOplah), 
+                            totalPcs: formatNumber(t.totalPcs), 
+                            lastCategory: t.category 
+                        };
                     }
                 });
-                return Object.values(projects).slice(0, 5);
+                return Object.values(projects).slice(0, 4);
             }, [tasks]);
 
             const handleSubmit = async (e) => {
@@ -115,19 +148,17 @@
                 let duration = (eH * 60 + eM) - (sH * 60 + sM);
                 if (duration < 0) duration += 1440;
 
-                const finalCategory = category === 'Lain-lain' ? `Lain-lain: ${customTask}` : category;
                 const now = new Date();
-                
                 const logData = {
                     date: now.toLocaleString('id-ID'),
                     workerName,
                     assistantNames: assistantNames || '-',
                     name: itemName,
-                    category: finalCategory,
-                    totalOplah: totalOplah || '0',
-                    oplah: oplah || '0',
-                    totalPcs: totalPcs || '0',
-                    pcsSelesai: pcsSelesai || '0',
+                    category,
+                    totalOplah: totalOplah.replace(/[^0-9]/g, '') || '0',
+                    oplah: oplah.replace(/[^0-9]/g, '') || '0',
+                    totalPcs: totalPcs.replace(/[^0-9]/g, '') || '0',
+                    pcsSelesai: pcsSelesai.replace(/[^0-9]/g, '') || '0',
                     kendala: kendala || '-',
                     startTime,
                     endTime,
@@ -138,272 +169,288 @@
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs'), {
                         ...logData,
                         createdAt: serverTimestamp(),
-                        month: now.getMonth(),
-                        year: now.getFullYear(),
                         dateString: now.toLocaleDateString('id-ID'),
-                        isoDate: now.toISOString().split('T')[0], // Simpan ISO date untuk filter
+                        isoDate: now.toISOString().split('T')[0],
                         durationValue: duration
                     });
 
                     if (SHEETS_WEBAPP_URL) {
-                        await fetch(SHEETS_WEBAPP_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(logData) });
+                        fetch(SHEETS_WEBAPP_URL, { 
+                            method: 'POST', 
+                            mode: 'no-cors', 
+                            headers: { 'Content-Type': 'text/plain' }, 
+                            body: JSON.stringify(logData) 
+                        }).catch(e => console.warn("Sheets Sync Fail", e));
                     }
 
                     setSyncStatus('success');
-                    setItemName(''); setTotalOplah(''); setTotalPcs(''); setOplah(''); setPcsSelesai(''); setStartTime(''); setEndTime(''); setCustomTask(''); setKendala(''); setAssistantNames('');
-                    setCategory('Laminasi Glossy'); 
+                    setItemName(''); setOplah(''); setPcsSelesai(''); setStartTime(''); setEndTime(''); setKendala('');
                     setTimeout(() => setSyncStatus(null), 3000);
-                } catch (err) { console.error("Save Error:", err); } finally { setIsSyncing(false); }
+                } catch (err) { 
+                    console.error("Save Error:", err); 
+                } finally { 
+                    setIsSyncing(false); 
+                }
             };
 
-            // REVISI: Filter tugas berdasarkan hari yang dipilih
             const filteredTasks = tasks.filter(task => {
-                if (!task.createdAt) return false;
-                const date = task.createdAt.toDate ? task.createdAt.toDate() : new Date();
-                const taskISO = date.toISOString().split('T')[0];
-                return taskISO === selectedDate;
+                const targetDate = selectedDate;
+                if (task.isoDate) return task.isoDate === targetDate;
+                if (task.createdAt) {
+                    const d = task.createdAt.toDate ? task.createdAt.toDate() : new Date();
+                    return d.toISOString().split('T')[0] === targetDate;
+                }
+                return false;
             });
 
             return (
-                <div className="max-w-2xl mx-auto p-4 md:p-8 pb-24 text-left text-slate-800">
-                    <header className="mb-6 bg-blue-900 p-6 rounded-3xl shadow-xl text-white flex justify-between items-center border-b-4 border-blue-700">
-                        <div>
-                            <div className="flex items-center gap-2 text-left">
-                                <Icon name="layers" className="text-blue-300" />
-                                <h1 className="text-xl font-black uppercase italic font-serif leading-none">Artdiary Laminasi</h1>
+                <div className="max-w-2xl mx-auto pb-28 min-h-screen relative">
+                    <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200 px-5 py-4 flex justify-between items-center rounded-b-xl shadow-sm">
+                        <div className="flex items-center gap-2.5">
+                            <div className="p-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-100">
+                                <Icon name="layers" size={18} className="text-white" />
                             </div>
-                            <p className="text-[10px] text-blue-200 uppercase font-bold mt-1 tracking-widest text-left">Sistem Laporan Kinerja</p>
+                            <h1 className="text-base font-extrabold tracking-tight text-slate-900 uppercase italic">Artdiary <span className="text-blue-600">Laminasi</span></h1>
                         </div>
-                        <div className={`w-3 h-3 rounded-full ${user ? 'bg-green-400 shadow-[0_0_10px_#4ade80]' : 'bg-red-500 animate-pulse'}`}></div>
+                        <div className={`flex items-center gap-2 px-2.5 py-1 rounded-full border transition-all ${user ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-red-50 border-red-100 text-red-500'}`}>
+                            <div className={`w-2 h-2 rounded-full ${user ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}></div>
+                            <span className="text-[10px] font-black uppercase tracking-tighter">{user ? 'Online' : 'Offline'}</span>
+                        </div>
                     </header>
 
-                    {syncStatus === 'success' && (
-                        <div className="mb-4 bg-green-600 text-white p-4 rounded-2xl flex items-center gap-3 shadow-lg transition-all">
-                            <Icon name="check-circle" />
-                            <p className="font-bold tracking-tight text-sm text-left">Laporan Berhasil Terkirim & Form Dibersihkan!</p>
-                        </div>
-                    )}
+                    <main className="p-4 space-y-6">
+                        {syncStatus === 'success' && (
+                            <div className="bg-emerald-600 text-white p-4 rounded-2xl flex items-center gap-3 shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+                                <Icon name="check-circle" size={20} />
+                                <p className="font-bold text-sm">Laporan terkirim & form dibersihkan!</p>
+                            </div>
+                        )}
 
-                    <section className="bg-white rounded-3xl shadow-lg border border-slate-200 p-6 mb-8 text-left transition-all">
-                        <form onSubmit={handleSubmit} className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
-                                    <label className="block text-[10px] font-black mb-1 text-blue-600 uppercase tracking-widest font-serif text-left">Nama Operator</label>
+                        <section className="bg-white rounded-[2rem] shadow-sm border border-slate-200 p-6">
+                            <form onSubmit={handleSubmit} className="space-y-5">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama Operator</label>
+                                        <div className="relative">
+                                            <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="Nama Anda" className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-700 bg-slate-50/50 transition-all" required />
+                                            <Icon name="user" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Kru / Asisten</label>
+                                        <div className="relative">
+                                            <input type="text" value={assistantNames} onChange={(e) => setAssistantNames(e.target.value)} placeholder="Nama kru..." className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-medium text-slate-600 bg-slate-50/50 transition-all" />
+                                            <Icon name="users" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {activeProjects.length > 0 && (
+                                    <div className="px-1">
+                                        <div className="flex items-center gap-1.5 mb-2">
+                                            <Icon name="history" size={12} className="text-slate-400" />
+                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Lanjutkan Projek</span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {activeProjects.map((p, idx) => (
+                                                <button key={idx} type="button" onClick={() => { setItemName(p.name); setTotalOplah(p.totalOplah); setTotalPcs(p.totalPcs); setCategory(p.lastCategory); }} className="text-[10px] font-bold bg-white hover:bg-blue-600 hover:text-white text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 transition-all active:scale-95 shadow-sm">
+                                                    {p.name}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                    <div className="sm:col-span-2 space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Nama Item / Order</label>
+                                        <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Contoh: Box Skincare Glow Up" className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800" required />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Tugas</label>
+                                        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold bg-white text-slate-700">
+                                            {['Laminasi Glossy', 'Laminasi Doff', 'Laminasi Hologram', 'Laminasi Window', 'Bantu Mesin Lem', 'Bantu QC', 'Lain-lain'].map(cat => (
+                                                <option key={cat} value={cat}>{cat}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-red-500 uppercase ml-1">Target Oplah</label>
+                                        <input type="text" value={totalOplah} onChange={(e) => setTotalOplah(formatNumber(e.target.value))} placeholder="0" className="w-full px-4 py-3 rounded-2xl border border-red-100 bg-red-50/20 font-bold text-red-700 outline-none focus:ring-2 focus:ring-red-500" />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-blue-600 uppercase ml-1">Target Pcs</label>
+                                        <input type="text" value={totalPcs} onChange={(e) => setTotalPcs(formatNumber(e.target.value))} placeholder="0" className="w-full px-4 py-3 rounded-2xl border border-blue-100 bg-blue-50/20 font-bold text-blue-800 outline-none focus:ring-2 focus:ring-blue-500" />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-dashed border-slate-200">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-emerald-600 uppercase ml-1">Oplah Selesai</label>
+                                        <input type="text" value={oplah} onChange={(e) => setOplah(formatNumber(e.target.value))} placeholder="Input hasil..." className="w-full px-4 py-3 rounded-2xl border-2 border-emerald-100 bg-emerald-50/50 font-extrabold text-emerald-800 text-lg outline-none focus:ring-2 focus:ring-emerald-500" />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-blue-800 uppercase ml-1">Pcs Selesai</label>
+                                        <input type="text" value={pcsSelesai} onChange={(e) => setPcsSelesai(formatNumber(e.target.value))} placeholder="Input pcs..." className="w-full px-4 py-3 rounded-2xl border-2 border-blue-100 bg-blue-50/50 font-extrabold text-blue-900 text-lg outline-none focus:ring-2 focus:ring-blue-600" />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-orange-600 uppercase ml-1">Kendala / Masalah</label>
                                     <div className="relative">
-                                        <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="Nama..." className="w-full pl-10 pr-4 py-2 rounded-xl border-2 border-white focus:border-blue-500 focus:outline-none bg-white font-bold text-slate-700" required />
-                                        <Icon name="user" className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" />
+                                        <input type="text" value={kendala} onChange={(e) => setKendala(e.target.value)} placeholder="Contoh: Lem habis, mesin trouble..." className="w-full pl-10 pr-4 py-3 rounded-2xl border border-orange-100 bg-orange-50/30 font-medium text-orange-900 outline-none focus:ring-2 focus:ring-orange-400" />
+                                        <Icon name="alert-circle" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-orange-400" size={16} />
                                     </div>
                                 </div>
-                                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                                    <label className="block text-[10px] font-black mb-1 text-slate-500 uppercase tracking-widest font-serif text-left">Nama Asisten OP</label>
-                                    <div className="relative">
-                                        <input type="text" value={assistantNames} onChange={(e) => setAssistantNames(e.target.value)} placeholder="Nama 1, Nama 2..." className="w-full pl-10 pr-4 py-2 rounded-xl border-2 border-white focus:border-blue-500 focus:outline-none bg-white font-bold text-slate-700" />
-                                        <Icon name="users" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 text-center block">Mulai</label>
+                                        <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full p-3 rounded-2xl border border-slate-200 font-bold text-center bg-slate-50 text-xl" required />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 text-center block">Selesai</label>
+                                        <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-full p-3 rounded-2xl border border-slate-200 font-bold text-center bg-slate-50 text-xl" required />
                                     </div>
                                 </div>
-                            </div>
 
-                            {activeProjects.length > 0 && (
-                                <div className="mb-2 px-1 text-left">
-                                    <label className="block text-[10px] font-black mb-2 text-slate-400 uppercase tracking-widest flex items-center gap-1 text-left">
-                                        <Icon name="history" size={12} /> Lanjutkan Proyek Terakhir
-                                    </label>
-                                    <div className="flex flex-wrap gap-2 text-left">
-                                        {activeProjects.map((p, idx) => (
-                                            <button key={idx} type="button" onClick={() => { setItemName(p.name); setTotalOplah(p.totalOplah); setTotalPcs(p.totalPcs); setCategory(p.lastCategory); }} className="text-[10px] font-bold bg-slate-50 hover:bg-blue-600 hover:text-white text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 transition-all">
-                                                {p.name}
-                                            </button>
-                                        ))}
+                                <button type="submit" disabled={isSyncing} className={`w-full ${isSyncing ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 active:scale-[0.98]'} text-white font-extrabold py-4 rounded-2xl transition-all shadow-xl shadow-blue-100 text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 mt-4`}>
+                                    {isSyncing ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <Icon name="send" size={16} />}
+                                    {isSyncing ? "Menyimpan..." : "Kirim Laporan"}
+                                </button>
+                            </form>
+                        </section>
+
+                        <section className="space-y-4">
+                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 px-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-2 bg-slate-900 rounded-xl">
+                                        <Icon name="activity" size={18} className="text-white" />
                                     </div>
+                                    <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">Monitoring</h2>
                                 </div>
-                            )}
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="md:col-span-2 text-left">
-                                    <label className="block text-xs font-black mb-2 text-slate-500 uppercase tracking-widest">Nama Item / Order</label>
-                                    <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Contoh: Box Skincare" className="w-full px-4 py-3 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:outline-none bg-slate-50 font-medium" required />
-                                </div>
-                                <div className="text-left">
-                                    <label className="block text-xs font-black mb-2 text-slate-500 uppercase tracking-widest font-serif">Jenis Tugas</label>
-                                    <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full px-4 py-3 rounded-2xl border-2 border-slate-100 focus:border-blue-500 bg-slate-50 font-bold outline-none">
-                                        <option value="Laminasi Glossy">Laminasi Glossy</option>
-                                        <option value="Laminasi Doff">Laminasi Doff</option>
-                                        <option value="Laminasi Hologram">Laminasi Hologram</option>
-                                        <option value="Laminasi Window">Laminasi Window</option>
-                                        <option value="Bantu Mesin Lem">Bantu Mesin Lem</option>
-                                        <option value="Bantu QC">Bantu QC</option>
-                                        <option value="Lem Manual">Lem Manual</option>
-                                        <option value="Lain-lain">Lain-lain</option>
-                                    </select>
-                                </div>
+                                <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="px-4 py-2 rounded-2xl border border-slate-200 font-bold text-xs bg-white shadow-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             </div>
+                            
+                            <div className="space-y-4">
+                                {loading ? (
+                                    <div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div></div>
+                                ) : filteredTasks.length === 0 ? (
+                                    <div className="bg-white border-2 border-dashed border-slate-200 rounded-[2rem] p-12 text-center">
+                                        <Icon name="inbox" size={40} className="mx-auto mb-4 text-slate-200" />
+                                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Tidak ada data di tanggal ini</p>
+                                    </div>
+                                ) : (
+                                    filteredTasks.map(task => {
+                                        const sameProjectTasks = tasks.filter(t => t.name === task.name);
+                                        const totalFinishedO = sameProjectTasks.reduce((sum, t) => sum + (parseInt(t.oplah) || 0), 0);
+                                        const targetO = parseInt(task.totalOplah) || 0;
+                                        const percentage = targetO > 0 ? Math.min(Math.round((totalFinishedO / targetO) * 100), 100) : 0;
+                                        const isBantu = task.category.includes('Bantu');
 
-                            <div className="grid grid-cols-2 gap-4 text-left">
-                                <div><label className="block text-xs font-black mb-2 text-red-500 uppercase tracking-widest">Total Oplah (Target)</label><input type="text" value={totalOplah} onChange={(e) => setTotalOplah(e.target.value)} placeholder="50.000" className="w-full px-4 py-3 rounded-2xl border-2 border-red-50 bg-red-50/30 font-bold text-red-700 focus:outline-none focus:border-red-400" /></div>
-                                <div><label className="block text-xs font-black mb-2 text-blue-600 uppercase tracking-widest">Total Pcs (Target)</label><input type="text" value={totalPcs} onChange={(e) => setTotalPcs(e.target.value)} placeholder="200.000" className="w-full px-4 py-3 rounded-2xl border-2 border-blue-50 bg-blue-50/30 font-bold text-blue-800 focus:outline-none focus:border-blue-400" /></div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4 text-left">
-                                <div><label className="block text-xs font-black mb-2 text-emerald-600 uppercase tracking-widest italic text-center text-left">Oplah Selesai</label><input type="text" value={oplah} onChange={(e) => setOplah(e.target.value)} placeholder="10.000" className="w-full px-4 py-3 rounded-2xl border-2 border-emerald-50 bg-emerald-50/30 font-bold text-emerald-800 text-left focus:outline-none focus:border-emerald-400" /></div>
-                                <div><label className="block text-xs font-black mb-2 text-blue-800 uppercase tracking-widest italic text-center text-left">Pcs Selesai</label><input type="text" value={pcsSelesai} onChange={(e) => setPcsSelesai(e.target.value)} placeholder="40.000" className="w-full px-4 py-3 rounded-2xl border-2 border-blue-200 bg-blue-50 font-bold text-blue-900 text-left focus:outline-none focus:border-blue-600" /></div>
-                            </div>
-
-                            <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 text-left">
-                                <label className="block text-[10px] font-black mb-1 text-orange-600 uppercase tracking-widest text-left">Kendala (Jika ada)</label>
-                                <input type="text" value={kendala} onChange={(e) => setKendala(e.target.value)} placeholder="Contoh: Lem habis, plastik nyelip..." className="w-full px-4 py-2 rounded-xl border-2 border-white focus:border-orange-500 outline-none font-bold text-orange-800 text-left" />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3 text-left">
-                                <div><label className="block text-xs font-black mb-2 text-slate-500 uppercase tracking-widest text-left font-serif">Mulai</label><input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full py-3 rounded-2xl border-2 border-slate-100 font-mono text-lg font-bold text-center bg-slate-50" required /></div>
-                                <div><label className="block text-xs font-black mb-2 text-slate-500 uppercase tracking-widest text-left font-serif">Selesai</label><input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-full py-3 rounded-2xl border-2 border-slate-100 font-mono text-lg font-bold text-center bg-slate-50" required /></div>
-                            </div>
-
-                            <button type="submit" disabled={isSyncing} className={`w-full ${isSyncing ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white font-black py-4 rounded-2xl transition-all shadow-lg active:scale-95 uppercase tracking-wider`}>
-                                {isSyncing ? "Menyimpan..." : "Kirim Laporan Produksi"}
-                            </button>
-                        </form>
-                    </section>
-
-                    <section className="text-left">
-                        <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 px-2 gap-3 text-left">
-                            <h2 className="text-xl font-black uppercase flex items-center gap-2 font-serif text-blue-900 text-left tracking-tight">
-                                <Icon name="filter" size={24} /> Monitoring Kerja
-                            </h2>
-                            {/* REVISI: Mengubah dropdown bulan menjadi input tanggal agar tampilan perhari */}
-                            <div className="relative">
-                                <input 
-                                    type="date" 
-                                    value={selectedDate} 
-                                    onChange={(e) => setSelectedDate(e.target.value)} 
-                                    className="bg-white px-4 py-2 rounded-2xl border-2 border-blue-100 text-sm font-black text-blue-800 shadow-sm outline-none focus:border-blue-500 transition-all w-full sm:w-auto"
-                                />
-                            </div>
-                        </div>
-                        
-                        <div className="space-y-6 text-left">
-                            {filteredTasks.length === 0 ? (
-                                <div className="bg-white border-4 border-dashed border-slate-200 rounded-3xl p-12 text-center text-slate-400 font-black uppercase text-xs tracking-[0.2em] italic text-left">
-                                    <Icon name="calendar-x" size={40} className="mx-auto mb-3 opacity-20" />
-                                    Tidak ada data untuk tanggal ini
-                                </div>
-                            ) : (
-                                filteredTasks.map(task => {
-                                    // Hitung kumulatif tetap menggunakan seluruh tasks (lintas hari) agar sisa oplah akurat
-                                    const totalFinishedOplah = tasks.filter(t => t.name === task.name && (t.createdAt?.seconds || 0) <= (task.createdAt?.seconds || 0)).reduce((sum, current) => sum + (parseInt(current.oplah) || 0), 0);
-                                    const totalFinishedPcs = tasks.filter(t => t.name === task.name && (t.createdAt?.seconds || 0) <= (task.createdAt?.seconds || 0)).reduce((sum, current) => sum + (parseInt(current.pcsSelesai) || 0), 0);
-                                    
-                                    const targetO = parseInt(task.totalOplah) || 0;
-                                    const targetP = parseInt(task.totalPcs) || 0;
-                                    const sisaO = targetO > 0 ? targetO - totalFinishedOplah : 0;
-                                    const sisaP = targetP > 0 ? targetP - totalFinishedPcs : 0;
-                                    const persen = targetO > 0 ? Math.min(Math.round((totalFinishedOplah / targetO) * 100), 100) : 0;
-                                    const isSupport = task.category.includes('Bantu') || task.category.includes('Lain');
-
-                                    return (
-                                        <div key={task.id} className={`bg-white rounded-3xl p-5 shadow-sm border border-slate-100 border-l-[12px] ${isSupport ? 'border-l-orange-500' : 'border-l-blue-600'} text-left`}>
-                                            <div className="flex flex-col sm:flex-row justify-between gap-4 text-left">
-                                                <div className="flex-1 min-w-0 text-left">
-                                                    <div className="flex flex-col mb-4 text-left">
-                                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1">PRODUK</span>
-                                                        <h3 className="font-black text-slate-800 text-3xl uppercase leading-tight truncate font-serif text-left">{task.name}</h3>
-                                                        
-                                                        <div className="flex flex-wrap gap-2 mt-2 items-center text-left">
-                                                            <div className="flex items-center gap-1 bg-blue-100 px-3 py-1 rounded-xl border border-blue-200">
-                                                                <Icon name="user" size={12} className="text-blue-600" />
-                                                                <span className="text-[11px] font-black text-blue-700 uppercase">Op: {task.workerName}</span>
-                                                            </div>
-                                                            <div className="flex items-center gap-1 bg-slate-100 px-3 py-1 rounded-xl border border-slate-200">
-                                                                <Icon name="users" size={12} className="text-slate-500" />
-                                                                <span className="text-[10px] font-bold text-slate-600 uppercase italic">Asisten: {task.assistantNames || '-'}</span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    
-                                                    <div className="mb-4 flex flex-col gap-2 text-left">
-                                                        <div className="flex items-center flex-wrap gap-2 text-left">
-                                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">Pekerjaan :</span>
-                                                            <span className={`px-2 py-1 text-[10px] font-black rounded-lg text-white ${isSupport ? 'bg-orange-500' : 'bg-slate-800'} text-left shadow-sm`}>{task.category}</span>
-                                                        </div>
-                                                        <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 flex-wrap text-left">
-                                                            <div className="bg-emerald-50 text-emerald-800 px-3 py-2 rounded-xl border border-emerald-100 text-left inline-block w-fit shadow-sm">
-                                                                <span className="text-[10px] font-black uppercase tracking-tight opacity-70">SELESAI HARI INI : </span>
-                                                                <span className="text-xl font-black text-emerald-600 ml-1">{formatNumber(task.oplah)}</span>
-                                                                <span className="text-xs font-bold ml-1 opacity-70 uppercase">Lbr Oplah</span>
-                                                            </div>
-                                                            
-                                                            <div className="text-xs font-black text-slate-400 uppercase px-1 italic">ATAU</div>
-                                                            
-                                                            <div className="bg-blue-50 text-blue-800 px-3 py-2 rounded-xl border border-blue-100 text-left inline-block w-fit shadow-sm">
-                                                                <span className="text-xl font-black text-blue-700">{formatNumber(task.pcsSelesai)}</span>
-                                                                <span className="text-xs font-bold ml-1 opacity-70 uppercase">PCS</span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    {task.kendala && task.kendala !== '-' && (
-                                                        <div className="mb-4 bg-orange-50 border border-orange-100 p-3 rounded-xl text-orange-700 flex items-start gap-3 text-left">
-                                                            <Icon name="alert-triangle" className="mt-1 shrink-0" />
-                                                            <div className="flex flex-col text-left">
-                                                                <span className="text-[8px] font-black uppercase text-left leading-none mb-1">Masalah Lapangan:</span>
-                                                                <p className="text-[11px] font-bold italic leading-tight text-left">"{task.kendala}"</p>
-                                                            </div>
-                                                        </div>
-                                                    )}
-
-                                                    <div className="grid grid-cols-2 gap-3 mb-4 font-bold text-left text-xs">
-                                                        <div className="bg-slate-50 p-3 rounded-xl text-left border border-slate-100 shadow-sm">
-                                                            <div className="text-[7px] text-slate-400 uppercase mb-1 flex items-center gap-1 text-left font-black tracking-tighter"><Icon name="target" size={8} /> Target Project</div>
-                                                            <div className="flex justify-between text-[11px] text-left">
-                                                                <span className="text-slate-800 text-left font-black">{formatNumber(task.totalOplah)} <small className="font-normal opacity-50 uppercase text-[9px]">lbr</small></span>
-                                                                <span className="text-blue-700 text-left font-black">{formatNumber(task.totalPcs)} <small className="font-normal opacity-50 uppercase text-[9px]">pcs</small></span>
-                                                            </div>
-                                                        </div>
-                                                        <div className="bg-slate-50 p-3 rounded-xl text-left border border-slate-100 shadow-sm">
-                                                            <div className="text-[7px] text-slate-400 uppercase mb-1 flex items-center gap-1 text-left font-black tracking-tighter"><Icon name="trending-up" size={8} /> Sisa Pengerjaan</div>
-                                                            <div className="flex justify-between text-[11px] text-left font-black">
-                                                                <span className="text-orange-600 text-left">{formatNumber(sisaO)} <small className="font-normal opacity-50 uppercase text-[9px]">lbr</small></span>
-                                                                <span className="text-orange-600 text-left">{formatNumber(sisaP)} <small className="font-normal opacity-50 uppercase text-[9px]">pcs</small></span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    {targetO > 0 && (
-                                                        <div className="mb-2 text-left px-1">
-                                                            <div className="flex justify-between items-center mb-1 text-left">
-                                                                <span className="text-[8px] font-bold text-slate-400 uppercase text-left">Progres Kumulatif</span>
-                                                                <span className="text-[10px] font-black text-blue-600 text-left">{persen}%</span>
-                                                            </div>
-                                                            <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden shadow-inner text-left border border-slate-300">
-                                                                <div className="h-full bg-blue-600 transition-all duration-1000 text-left" style={{ width: `${persen}%` }}></div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                    
-                                                    <div className="text-sm font-black text-slate-600 uppercase mt-4 flex items-center gap-2 text-left bg-white w-fit px-3 py-1.5 rounded-xl border-2 border-slate-200 shadow-sm">
-                                                        <Icon name="calendar" size={16} className="text-blue-600" /> {task.dateString}
-                                                    </div>
-                                                </div>
+                                        return (
+                                            <div key={task.id} className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 relative overflow-hidden group">
+                                                <div className={`absolute top-0 left-0 w-2 h-full transition-all ${isBantu ? 'bg-orange-400' : 'bg-blue-600'}`}></div>
                                                 
-                                                <div className="text-right flex flex-col items-end shrink-0 text-left min-w-[140px]">
-                                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2 text-right italic text-left font-serif">Durasi Shift</p>
-                                                    <div className="bg-blue-900 text-white px-4 py-2 rounded-2xl mb-3 font-mono text-base font-black text-left flex items-center gap-2 shadow-lg border-b-4 border-blue-950">
-                                                        <Icon name="clock" size={18} className="text-blue-300" />
-                                                        {task.startTime} — {task.endTime}
+                                                <div className="flex flex-col sm:flex-row justify-between gap-6">
+                                                    <div className="flex-1 space-y-4">
+                                                        <div>
+                                                            <div className="flex items-center gap-2 mb-1.5">
+                                                                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Produk</span>
+                                                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full text-white ${isBantu ? 'bg-orange-400' : 'bg-slate-800'}`}>{task.category}</span>
+                                                            </div>
+                                                            <h3 className="text-2xl font-extrabold text-slate-900 leading-tight uppercase font-serif italic">{task.name}</h3>
+                                                            <div className="flex flex-wrap gap-2 mt-3">
+                                                                <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-50 border border-slate-100 rounded-full">
+                                                                    <Icon name="user" size={12} className="text-slate-400" />
+                                                                    <span className="text-[10px] font-bold text-slate-600">{task.workerName}</span>
+                                                                </div>
+                                                                {task.assistantNames && task.assistantNames !== '-' && (
+                                                                    <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-50 border border-slate-100 rounded-full">
+                                                                        <Icon name="users" size={12} className="text-slate-400" />
+                                                                        <span className="text-[10px] font-medium text-slate-500 italic">Asist: {task.assistantNames}</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div className="bg-emerald-50/50 p-3 rounded-2xl border border-emerald-100">
+                                                                <p className="text-[8px] font-black text-emerald-600 uppercase mb-0.5 italic">Hasil Oplah</p>
+                                                                <p className="text-xl font-black text-emerald-700">{Number(task.oplah).toLocaleString('id-ID')} <span className="text-[10px] font-normal opacity-50 italic">Lbr</span></p>
+                                                            </div>
+                                                            <div className="bg-blue-50/50 p-3 rounded-2xl border border-blue-100">
+                                                                <p className="text-[8px] font-black text-blue-600 uppercase mb-0.5 italic">Hasil Pcs</p>
+                                                                <p className="text-xl font-black text-blue-700">{Number(task.pcsSelesai).toLocaleString('id-ID')} <span className="text-[10px] font-normal opacity-50 italic">Pcs</span></p>
+                                                            </div>
+                                                        </div>
+
+                                                        {targetO > 0 && (
+                                                            <div className="space-y-1.5 pt-1">
+                                                                <div className="flex justify-between items-end">
+                                                                    <span className="text-[9px] font-black text-slate-400 uppercase italic">Progres Projek</span>
+                                                                    <span className="text-[10px] font-black text-blue-600">{percentage}%</span>
+                                                                </div>
+                                                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                                                                    <div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: `${percentage}%` }}></div>
+                                                                </div>
+                                                                <p className="text-[8px] font-bold text-slate-400 text-right uppercase tracking-tighter">Kumulatif: {totalFinishedO.toLocaleString('id-ID')} / {targetO.toLocaleString('id-ID')} Lbr</p>
+                                                            </div>
+                                                        )}
+
+                                                        {task.kendala && task.kendala !== '-' && (
+                                                            <div className="bg-orange-50 p-3 rounded-2xl border border-orange-100 flex gap-3 items-start">
+                                                                <Icon name="alert-triangle" size={14} className="text-orange-500 mt-0.5 shrink-0" />
+                                                                <div>
+                                                                    <p className="text-[8px] font-black text-orange-600 uppercase leading-none mb-1">Catatan Kendala:</p>
+                                                                    <p className="text-[11px] font-bold text-orange-800 italic leading-tight">"{task.kendala}"</p>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
-                                                    
-                                                    <p className={`font-mono font-black text-4xl leading-none mb-4 ${isSupport ? 'text-orange-600' : 'text-blue-700'} text-left tracking-tighter`}>
-                                                        {task.duration.split(' ')[0]} 
-                                                        <small className="text-[11px] uppercase font-black text-slate-400 block mt-1">menit kerja</small>
-                                                    </p>
-                                                    <button onClick={async () => { if(confirm("Hapus laporan ini?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs', task.id)); }} className="p-3 text-slate-300 hover:text-red-500 transition-all rounded-xl hover:bg-red-50 text-left border-2 border-transparent hover:border-red-100"><Icon name="trash-2" size={26} /></button>
+
+                                                    <div className="flex sm:flex-col justify-between items-end sm:w-32 border-t sm:border-t-0 sm:border-l border-slate-100 pt-4 sm:pt-0 sm:pl-4">
+                                                        <div className="text-right space-y-1.5">
+                                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Waktu Shift</p>
+                                                            <div className="inline-flex items-center gap-1.5 bg-slate-900 text-white px-3 py-1.5 rounded-xl font-mono text-[11px] font-bold shadow-md">
+                                                                <Icon name="clock" size={10} className="text-blue-400" />
+                                                                {task.startTime}-{task.endTime}
+                                                            </div>
+                                                            <p className="text-3xl font-black text-slate-900 leading-none pt-2 tracking-tighter">{task.durationValue}<span className="text-[10px] text-slate-400 block font-sans font-bold uppercase mt-1">Menit</span></p>
+                                                        </div>
+                                                        
+                                                        <button onClick={async () => { if(confirm("Hapus data ini?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'laminasi_logs', task.id)); }} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all">
+                                                            <Icon name="trash-2" size={18} />
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    );
-                                })
-                            )}
+                                        );
+                                    })
+                                )}
+                            </div>
+                        </section>
+                    </main>
+
+                    <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg border-t border-slate-200 px-6 py-4 z-50 flex justify-around items-center max-w-2xl mx-auto rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
+                        <div className="text-center group">
+                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 group-hover:text-emerald-500 transition-colors">Oplah Hari Ini</p>
+                            <p className="text-sm font-black text-emerald-600">{filteredTasks.reduce((s, t) => s + (parseInt(t.oplah) || 0), 0).toLocaleString('id-ID')}</p>
                         </div>
-                    </section>
+                        <div className="h-8 w-px bg-slate-200"></div>
+                        <div className="text-center group">
+                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 group-hover:text-blue-500 transition-colors">Durasi Kerja</p>
+                            <p className="text-sm font-black text-blue-600">{filteredTasks.reduce((s, t) => s + (parseInt(t.durationValue) || 0), 0)} Menit</p>
+                        </div>
+                        <div className="h-8 w-px bg-slate-200"></div>
+                        <div className="text-center group">
+                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5 group-hover:text-blue-900 transition-colors">Pcs Hari Ini</p>
+                            <p className="text-sm font-black text-blue-900">{filteredTasks.reduce((s, t) => s + (parseInt(t.pcsSelesai) || 0), 0).toLocaleString('id-ID')}</p>
+                        </div>
+                    </nav>
                 </div>
             );
         };
