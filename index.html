@@ -25,12 +25,12 @@
         // ==========================================================
         const manualConfig = {
             apiKey: "AIzaSyDhqBiORVQBr4RJhjV_Q8CAcyGthNTKOz8",
-  authDomain: "laminasi-artdiary.firebaseapp.com",
-  projectId: "laminasi-artdiary",
-  storageBucket: "laminasi-artdiary.firebasestorage.app",
-  messagingSenderId: "791864658926",
-  appId: "1:791864658926:web:a2136c6df23e2ed99e1cff",
-  measurementId: "G-92JVZJHLER"
+            authDomain: "laminasi-artdiary.firebaseapp.com",
+            projectId: "laminasi-artdiary",
+            storageBucket: "laminasi-artdiary.firebasestorage.app",
+            messagingSenderId: "791864658926",
+            appId: "1:791864658926:web:a2136c6df23e2ed99e1cff",
+            measurementId: "G-92JVZJHLER"
         };
         // ==========================================================
 
@@ -154,7 +154,7 @@
                     setCustomTask(''); 
                     setKendala(''); 
                     setAssistantNames('');
-                    setCategory('Laminasi Glossy'); // Kembali ke pilihan pertama
+                    setCategory('Laminasi Glossy'); 
                     
                     setTimeout(() => setSyncStatus(null), 3000);
                 } catch (err) { console.error("Save Error:", err); } finally { setIsSyncing(false); }
@@ -307,8 +307,8 @@
                                                     </div>
                                                     <div className="mb-3 flex flex-wrap gap-2 text-[10px] font-black uppercase text-left">
                                                         <span className={`px-2 py-0.5 rounded-lg text-white ${isSupport ? 'bg-orange-500' : 'bg-slate-800'} text-left`}>{task.category}</span>
-                                                        <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg border border-emerald-100 text-left">+{task.oplah} lbr</span>
-                                                        <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg border border-blue-100 text-left">+{task.pcsSelesai} pcs</span>
+                                                        <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg border border-emerald-100 text-left">Selesai hari ini : {task.oplah} LBR OPLAH</span>
+                                                        <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg border border-blue-100 text-left">Selesai hari ini : {task.pcsSelesai} PCS</span>
                                                     </div>
 
                                                     {task.kendala && task.kendala !== '-' && (
